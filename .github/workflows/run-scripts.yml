@@ -35,16 +35,15 @@ jobs:
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
-          # Write the service account JSON to a file without altering formatting
           printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > sa.json
 
-      - name: Discover & run scripts (with 120s timeout each)
+      - name: Discover & run scripts (robust capture, 120s timeout, multiline-safe)
         id: run_all
         shell: bash
         run: |
-          set -eo pipefail
+          set -euo pipefail
 
-          # Ensure scripts directory exists
+          # Find scripts
           if ! ls -1 scripts/*.py >/dev/null 2>&1; then
             echo "No scripts found in scripts/*.py — nothing to do."
             : > results.jsonl
@@ -53,32 +52,49 @@ jobs:
 
           : > results.jsonl
 
-          # Loop serially; each script must print exactly one JSON object (ideally single line).
           for f in scripts/*.py; do
             base="$(basename "$f")"
             name="${base%.py}"
             echo "==> Running $base"
 
-            # Run with hard timeout of 120s. Capture stdout only.
-            # If multiple lines are printed, take the last non-empty line.
+            out_file="$(mktemp)"
+            err_file="$(mktemp)"
+
+            # Run with 120s hard timeout, capture both streams
             set +e
-            out="$(timeout 120s python "$f" 2>/dev/null | awk 'NF{p=$0} END{print p}')"
+            timeout 120s python "$f" >"$out_file" 2>"$err_file"
             code=$?
             set -e
 
-            if [ $code -ne 0 ] || [ -z "$out" ]; then
-              echo "    Skipping $base (timeout/exit nonzero/empty output)."
+            if [ $code -ne 0 ]; then
+              echo "    ❌ $base exited with code $code"
+              echo "    --- stderr (first 50 lines) ---"
+              sed -n '1,50p' "$err_file" || true
+              echo "    --- end stderr ---"
               continue
             fi
 
-            # Validate that the captured line is valid JSON
-            if ! echo "$out" | jq -e . >/dev/null 2>&1; then
-              echo "    Skipping $base (invalid JSON)."
+            # Read stdout; allow multi-line JSON; compact with jq -c
+            if [ ! -s "$out_file" ]; then
+              echo "    ⚠️  $base produced empty stdout; skipping."
               continue
             fi
 
-            # Store as JSONL with {name, json}, preserving raw JSON string
-            jq -n --arg name "$name" --arg raw "$out" '{name:$name, json:$raw}' >> results.jsonl
+            if jq -e . < "$out_file" >/dev/null 2>&1; then
+              compact="$(jq -c . < "$out_file")"
+              # Store as JSONL: {name, json}
+              jq -n --arg name "$name" --arg raw "$compact" '{name:$name, json:$raw}' >> results.jsonl
+              echo "    ✅ captured JSON for $base"
+            else
+              echo "    ⚠️  $base stdout is not valid JSON; skipping."
+              echo "    --- stdout (first 50 lines) ---"
+              sed -n '1,50p' "$out_file" || true
+              echo "    --- end stdout ---"
+              echo "    --- stderr (first 20 lines) ---"
+              sed -n '1,20p' "$err_file" || true
+              echo "    --- end stderr ---"
+              continue
+            fi
           done
 
           echo "Run complete."
