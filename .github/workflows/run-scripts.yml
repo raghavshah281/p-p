@@ -1,0 +1,95 @@
+name: Run Python Scripts → Google Sheets (daily)
+
+on:
+  schedule:
+    - cron: "0 5 * * *"   # 05:00 UTC = 10:30 IST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
+
+jobs:
+  run-and-write:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # jq is preinstalled on ubuntu-latest; this is just a safety:
+          sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Prepare service account credentials
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          # Write the service account JSON to a file without altering formatting
+          printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > sa.json
+
+      - name: Discover & run scripts (with 120s timeout each)
+        id: run_all
+        shell: bash
+        run: |
+          set -eo pipefail
+
+          # Ensure scripts directory exists
+          if ! ls -1 scripts/*.py >/dev/null 2>&1; then
+            echo "No scripts found in scripts/*.py — nothing to do."
+            # Still produce an empty results file so the writer step runs cleanly.
+            : > results.jsonl
+            exit 0
+          fi
+
+          : > results.jsonl
+          # Loop serially to keep Sheets writing deterministic later.
+          for f in scripts/*.py; do
+            base="$(basename "$f")"
+            name="${base%.py}"
+            echo "==> Running $base"
+
+            # Run with hard timeout of 120s. Capture stdout only.
+            # If the script writes extra lines, take the last non-empty line.
+            set +e
+            out="$(timeout 120s python "$f" 2>/dev/null | awk 'NF{p=$0} END{print p}')"
+            code=$?
+            set -e
+
+            if [ $code -ne 0 ] || [ -z "$out" ]; then
+              echo "    Skipping $base (timeout/exit nonzero/empty output)."
+              continue
+            fi
+
+            # Validate JSON
+            if ! echo "$out" | jq -e . >/dev/null 2>&1; then
+              echo "    Skipping $base (invalid JSON)."
+              continue
+            fi
+
+            # Store result as a JSON line: {"name": "...", "json": "<raw json string>"}
+            # We preserve the raw JSON string as-is (no pretty print), to write into a single cell.
+            jq -n --arg name "$name" --arg raw "$out" '{name:$name, json:$raw}' >> results.jsonl
+          done
+
+          echo "Run complete."
+
+      - name: Write to Google Sheets (prepend rows; retry once on failure)
+        env:
+          GOOGLE_SPREADSHEET_ID: ${{ env.GOOGLE_SPREADSHEET_ID }}
+        run: |
+          python tools/sheets_writer.py \
+            --service-account-json sa.json \
+            --spreadsheet-id "$GOOGLE_SPREADSHEET_ID" \
+            --results-file results.jsonl
