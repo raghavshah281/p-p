@@ -82,7 +82,8 @@ jobs:
 
             if jq -e . < "$out_file" >/dev/null 2>&1; then
               compact="$(jq -c . < "$out_file")"
-              jq -n --arg name "$name" --arg raw "$compact" '{name:$name, json:$raw}' >> "$RESULTS_FILE"
+              # IMPORTANT: -c here makes the wrapper a single line JSON object
+              jq -nc --arg name "$name" --arg raw "$compact" '{name:$name, json:$raw}' >> "$RESULTS_FILE"
               echo "    ✅ captured JSON for $base"
             else
               echo "    ⚠️  $base stdout is not valid JSON; skipping."
@@ -97,7 +98,7 @@ jobs:
           done
 
           echo "Run complete."
-          # Save a copy path for later steps (deterministic)
+          # Save a deterministic path for later steps
           echo "$RUNNER_TEMP/results.jsonl" > "$RUNNER_TEMP/results_path.txt"
 
       - name: Verify captured results
