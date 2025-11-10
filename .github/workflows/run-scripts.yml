@@ -97,12 +97,14 @@ jobs:
           done
 
           echo "Run complete."
-          echo "RESULTS_FILE=$RESULTS_FILE" >> "$GITHUB_ENV"
+          # Save a copy path for later steps (deterministic)
+          echo "$RUNNER_TEMP/results.jsonl" > "$RUNNER_TEMP/results_path.txt"
 
       - name: Verify captured results
         shell: bash
         run: |
           set -euo pipefail
+          RESULTS_FILE="$(cat "$RUNNER_TEMP/results_path.txt" 2>/dev/null || true)"
           if [ -z "${RESULTS_FILE:-}" ] || [ ! -f "$RESULTS_FILE" ]; then
             echo "No results file present."
             exit 0
@@ -117,6 +119,8 @@ jobs:
         env:
           GOOGLE_SPREADSHEET_ID: ${{ env.GOOGLE_SPREADSHEET_ID }}
         run: |
+          set -euo pipefail
+          RESULTS_FILE="$(cat "$RUNNER_TEMP/results_path.txt" 2>/dev/null || true)"
           if [ -z "${RESULTS_FILE:-}" ] || [ ! -s "$RESULTS_FILE" ]; then
             echo "No successful outputs to write."
             exit 0
