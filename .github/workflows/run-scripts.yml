@@ -43,14 +43,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          RESULTS_FILE="$RUNNER_TEMP/results.jsonl"
+          : > "$RESULTS_FILE"
+
           # Find scripts
           if ! ls -1 scripts/*.py >/dev/null 2>&1; then
             echo "No scripts found in scripts/*.py — nothing to do."
-            : > results.jsonl
             exit 0
           fi
-
-          : > results.jsonl
 
           for f in scripts/*.py; do
             base="$(basename "$f")"
@@ -80,10 +80,10 @@ jobs:
               continue
             fi
 
-            if jq -e . < "$out_file" >/dev/null 2>&1; then
+            if jq -e . < "$out_file" >/devnull 2>&1; then
               compact="$(jq -c . < "$out_file")"
               # Store as JSONL: {name, json}
-              jq -n --arg name "$name" --arg raw "$compact" '{name:$name, json:$raw}' >> results.jsonl
+              jq -n --arg name "$name" --arg raw "$compact" '{name:$name, json:$raw}' >> "$RESULTS_FILE"
               echo "    ✅ captured JSON for $base"
             else
               echo "    ⚠️  $base stdout is not valid JSON; skipping."
@@ -98,12 +98,31 @@ jobs:
           done
 
           echo "Run complete."
+          echo "RESULTS_FILE=$RESULTS_FILE" >> "$GITHUB_ENV"
+
+      - name: Verify captured results
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${RESULTS_FILE:-}" ] || [ ! -f "$RESULTS_FILE" ]; then
+            echo "No results file present."
+            exit 0
+          fi
+          echo "results.jsonl path: $RESULTS_FILE"
+          echo "Size (bytes): $(wc -c < "$RESULTS_FILE" || echo 0)"
+          echo "--- First 3 lines ---"
+          sed -n '1,3p' "$RESULTS_FILE" || true
+          echo "---------------------"
 
       - name: Write to Google Sheets (prepend rows; retry once on failure)
         env:
           GOOGLE_SPREADSHEET_ID: ${{ env.GOOGLE_SPREADSHEET_ID }}
         run: |
+          if [ -z "${RESULTS_FILE:-}" ] || [ ! -s "$RESULTS_FILE" ]; then
+            echo "No successful outputs to write."
+            exit 0
+          fi
           python tools/sheets_writer.py \
             --service-account-json sa.json \
             --spreadsheet-id "$GOOGLE_SPREADSHEET_ID" \
-            --results-file results.jsonl
+            --results-file "$RESULTS_FILE"
