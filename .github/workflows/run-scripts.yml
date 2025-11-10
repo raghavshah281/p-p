@@ -80,9 +80,8 @@ jobs:
               continue
             fi
 
-            if jq -e . < "$out_file" >/devnull 2>&1; then
+            if jq -e . < "$out_file" >/dev/null 2>&1; then
               compact="$(jq -c . < "$out_file")"
-              # Store as JSONL: {name, json}
               jq -n --arg name "$name" --arg raw "$compact" '{name:$name, json:$raw}' >> "$RESULTS_FILE"
               echo "    ✅ captured JSON for $base"
             else
