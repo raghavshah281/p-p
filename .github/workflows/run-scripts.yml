@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout
-      - uses: actions/checkout@v4
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -29,7 +29,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          # jq is preinstalled on ubuntu-latest; this is just a safety:
           sudo apt-get update && sudo apt-get install -y jq
 
       - name: Prepare service account credentials
@@ -48,20 +47,20 @@ jobs:
           # Ensure scripts directory exists
           if ! ls -1 scripts/*.py >/dev/null 2>&1; then
             echo "No scripts found in scripts/*.py — nothing to do."
-            # Still produce an empty results file so the writer step runs cleanly.
             : > results.jsonl
             exit 0
           fi
 
           : > results.jsonl
-          # Loop serially to keep Sheets writing deterministic later.
+
+          # Loop serially; each script must print exactly one JSON object (ideally single line).
           for f in scripts/*.py; do
             base="$(basename "$f")"
             name="${base%.py}"
             echo "==> Running $base"
 
             # Run with hard timeout of 120s. Capture stdout only.
-            # If the script writes extra lines, take the last non-empty line.
+            # If multiple lines are printed, take the last non-empty line.
             set +e
             out="$(timeout 120s python "$f" 2>/dev/null | awk 'NF{p=$0} END{print p}')"
             code=$?
@@ -72,14 +71,13 @@ jobs:
               continue
             fi
 
-            # Validate JSON
+            # Validate that the captured line is valid JSON
             if ! echo "$out" | jq -e . >/dev/null 2>&1; then
               echo "    Skipping $base (invalid JSON)."
               continue
             fi
 
-            # Store result as a JSON line: {"name": "...", "json": "<raw json string>"}
-            # We preserve the raw JSON string as-is (no pretty print), to write into a single cell.
+            # Store as JSONL with {name, json}, preserving raw JSON string
             jq -n --arg name "$name" --arg raw "$out" '{name:$name, json:$raw}' >> results.jsonl
           done
 
