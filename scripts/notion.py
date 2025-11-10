@@ -230,5 +230,4 @@ if __name__ == "__main__":
 
     if scraped_data:
         # Output the results in a clean JSON format
-        output_json = json.dumps(scraped_data, indent=4)
-        print(output_json)
+        print(json.dumps(scraped_data, separators=(',', ':')))
