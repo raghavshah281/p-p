@@ -30,10 +30,11 @@ def sanitize_sheet_title(raw: str) -> str:
 def a1_escape(title: str) -> str:
     """
     Escape sheet titles for A1 notation:
-    - Wrap in single quotes
-    - Double any single quotes inside the title
+    Wrap in single quotes and double any internal single quotes.
+    No f-strings used to avoid escaping confusion.
     """
-    return f"'{title.replace(\"'\", \"''\")}'"
+    title = title.replace("'", "''")
+    return "'" + title + "'"
 
 
 def ensure_sheet_and_get_id(svc, spreadsheet_id: str, title: str) -> int:
@@ -48,7 +49,6 @@ def ensure_sheet_and_get_id(svc, spreadsheet_id: str, title: str) -> int:
         if props.get("title") == title:
             return int(props["sheetId"])
 
-    # Create new sheet
     req = {
         "requests": [
             {"addSheet": {"properties": {"title": title}}}
@@ -62,9 +62,6 @@ def ensure_sheet_and_get_id(svc, spreadsheet_id: str, title: str) -> int:
 
 
 def prepend_row(svc, spreadsheet_id: str, sheet_id: int, title: str, timestamp_ist: str, json_blob: str):
-    """
-    Insert a new row at index 0, then write timestamp + JSON.
-    """
     insert_req = {
         "requests": [
             {
@@ -84,7 +81,7 @@ def prepend_row(svc, spreadsheet_id: str, sheet_id: int, title: str, timestamp_i
         spreadsheetId=spreadsheet_id, body=insert_req
     ).execute()
 
-    range_a1 = f"{a1_escape(title)}!A1:B1"
+    range_a1 = a1_escape(title) + "!A1:B1"
     body = {"values": [[timestamp_ist, json_blob]]}
 
     svc.spreadsheets().values().update(
@@ -104,26 +101,22 @@ def write_with_retry(svc, spreadsheet_id: str, sheet_id: int, title: str, timest
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Write script outputs to Google Sheets.")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--service-account-json", required=True)
     parser.add_argument("--spreadsheet-id", required=True)
     parser.add_argument("--results-file", required=True)
     args = parser.parse_args()
 
-    # Load results
     results = []
     try:
         with open(args.results_file, "r", encoding="utf-8") as fh:
             for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
                 try:
                     results.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-    except FileNotFoundError:
-        results = []
+                except:
+                    pass
+    except:
+        pass
 
     if not results:
         print("No successful outputs to write.", file=sys.stderr)
@@ -140,11 +133,9 @@ def main():
         try:
             sheet_id = ensure_sheet_and_get_id(svc, args.spreadsheet_id, title)
             write_with_retry(svc, args.spreadsheet_id, sheet_id, title, timestamp_ist, raw_json)
-            print(f"✔ Wrote row → Sheet: {title}")
+            print(f"✔ Wrote → {title}")
         except Exception as e:
             print(f"✖ Skipped {title}: {e}", file=sys.stderr)
-
-    return 0
 
 
 if __name__ == "__main__":
